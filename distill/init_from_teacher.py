@@ -430,14 +430,66 @@ def init_attention_layer(
 #     SELECTION, not an SVD rotation -- see init_ffn_layer docstring for why.
 # --------------------------------------------------------------------------
 
-def select_ffn_channels(hidden_activations: torch.Tensor, student_hidden: int) -> torch.Tensor:
-    """Which of the teacher's `teacher_hidden` gated-FFN channels to keep, by
-    activation RMS (highest-energy channels first, then sorted back into their
-    original order so `linear_in`'s two halves and `linear_out`'s columns stay
-    consistently indexed)."""
-    rms = hidden_activations.pow(2).mean(dim=0).sqrt()
+def select_ffn_channels_from_rms(rms: torch.Tensor, student_hidden: int) -> torch.Tensor:
+    """Which gated-FFN channels to keep, given their per-channel activation RMS: highest energy first,
+    then sorted back into original order so `linear_in`'s two halves and `linear_out`'s columns stay
+    consistently indexed."""
     idx = torch.argsort(rms, descending=True)[:student_hidden]
     return torch.sort(idx).values
+
+
+def select_ffn_channels(hidden_activations: torch.Tensor, student_hidden: int) -> torch.Tensor:
+    """Same selection, from the full `[N, teacher_hidden]` activation matrix."""
+    return select_ffn_channels_from_rms(hidden_activations.pow(2).mean(dim=0).sqrt(), student_hidden)
+
+
+@torch.no_grad()
+def collect_ffn_channel_rms(
+    gates: dict[int, torch.nn.Module], run_fn: tp.Callable[[Batch], None], batches: tp.Sequence[Batch],
+) -> dict[int, torch.Tensor]:
+    """Per-channel activation RMS of the gated-hidden space for MANY layers, in ONE pass over `batches`.
+
+    This replaces calling `collect_ffn_hidden_activations` once per selected layer. That cost one full
+    teacher forward pass over every calibration batch PER LAYER -- 16 x 64 = 1024 teacher forwards on the
+    student_ppx_m run, which made initialization take 1096 s. Rank 0 runs this alone while the other ranks
+    block in `dist.broadcast_object_list`, and NCCL's heartbeat monitor SIGABRTs a rank whose collective has
+    sat for ~8 minutes, so the slow init did not just waste time -- it killed the job outright.
+
+    `select_ffn_channels` only ever needed the per-channel RMS, and RMS is a streaming statistic: accumulate
+    sum-of-squares per channel and divide by the count at the end. So one pass with every layer hooked at
+    once is enough, and the memory is `num_layers x teacher_hidden` floats instead of the
+    `[N, teacher_hidden]` matrix per layer (127,744 x 11,264 fp32 = 5.75 GB each, which is why the original
+    had to do them one at a time).
+    """
+    sumsq: dict[int, torch.Tensor] = {}
+    count: dict[int, int] = {}
+    handles = []
+
+    def make_hook(key: int, gate: torch.nn.Module):
+        def hook(module, inputs, output):
+            # `_gating_hidden_activation` recomputes linear_out's true input from the gating module's input;
+            # see its docstring for why a hook on `linear_out` never fires.
+            h = _gating_hidden_activation(gate, inputs[0].detach()).reshape(-1, gate.linear_out.weight.shape[1])
+            s = h.pow(2).sum(dim=0).double()
+            if key in sumsq:
+                sumsq[key] += s
+                count[key] += h.shape[0]
+            else:
+                sumsq[key] = s
+                count[key] = h.shape[0]
+        return hook
+
+    for key, gate in gates.items():
+        handles.append(gate.register_forward_hook(make_hook(key, gate)))
+    try:
+        for batch in batches:
+            run_fn(batch)
+    finally:
+        for h in handles:
+            h.remove()
+    missing = [k for k in gates if k not in sumsq]
+    assert not missing, f"no gated-hidden activations captured for layers {missing}"
+    return {k: (sumsq[k] / max(count[k], 1)).sqrt().float() for k in sumsq}
 
 
 @torch.no_grad()
@@ -445,10 +497,13 @@ def init_ffn_layer(
     teacher_layer: StreamingTransformerLayer,
     student_layer,  # GQAStreamingTransformerLayer
     proj: Projection,
-    hidden_activations: torch.Tensor,
+    hidden_activations: tp.Optional[torch.Tensor] = None,
+    channel_rms: tp.Optional[torch.Tensor] = None,
 ):
     """`hidden_activations` are the FFN's gated-hidden values (post SiLU-gate *
     value, see `_gating_hidden_activation`) -- i.e. `linear_out`'s true input.
+    Pass `channel_rms` instead (from `collect_ffn_channel_rms`) to skip materializing that matrix; only its
+    per-channel RMS is ever used. Exactly one of the two is required.
 
     Unlike the residual stream, the FFN hidden dimension sits behind an
     ELEMENTWISE nonlinearity (`activation(gate) * value`, per channel). An SVD
@@ -476,7 +531,9 @@ def init_ffn_layer(
     student_hidden = gate_s.linear_out.weight.shape[1]
     teacher_hidden = gate_t.linear_out.weight.shape[1]
 
-    channel_idx = select_ffn_channels(hidden_activations, student_hidden)
+    assert (hidden_activations is None) != (channel_rms is None),         "init_ffn_layer needs exactly one of hidden_activations / channel_rms"
+    channel_idx = (select_ffn_channels_from_rms(channel_rms, student_hidden) if channel_rms is not None
+                   else select_ffn_channels(hidden_activations, student_hidden))
     down_r = proj.down.to(gate_t.linear_in.weight.dtype)
     up_r = proj.up.to(gate_t.linear_in.weight.dtype)
 
@@ -739,17 +796,17 @@ def initialize_student(
     q_head_idx = select_query_heads(num_teacher_heads, student.student_config.num_attention_heads)
     kv_bands = kv_head_bands(num_teacher_heads, student.student_config.num_key_value_heads)
 
-    # Re-running the full teacher forward pass per selected layer is `num_layers`x
-    # more calibration compute than strictly necessary (one pass with all hooks
-    # attached at once would do), but this is a one-time init cost over
-    # `num_calibration_batches` batches, and the simplicity is worth it here.
+    # ONE teacher pass for every selected layer's FFN channel statistics, not one pass per layer. The
+    # per-layer version cost num_layers x num_calibration_batches teacher forwards (16 x 64 = 1024 on
+    # student_ppx_m), which took 1096 s -- long enough that NCCL's heartbeat monitor aborted the ranks
+    # waiting on rank 0 and killed the job. See `collect_ffn_channel_rms`.
+    ffn_rms = collect_ffn_channel_rms(
+        {t: teacher.transformer.layers[t].gating for t in selected}, run_teacher, calibration_batches)
     for student_idx, teacher_idx in enumerate(selected):
         teacher_layer = teacher.transformer.layers[teacher_idx]
         student_layer = student.transformer.layers[student_idx]
         init_attention_layer(teacher_layer, student_layer, q_head_idx, kv_bands, proj)
-
-        hidden_acts = collect_ffn_hidden_activations(teacher_layer.gating, run_teacher, calibration_batches)
-        init_ffn_layer(teacher_layer, student_layer, proj, hidden_acts)
+        init_ffn_layer(teacher_layer, student_layer, proj, channel_rms=ffn_rms[teacher_idx])
 
     init_embeddings(teacher, student, proj)
     bridge_diag = init_bridge_least_squares(student, teacher, calibration_batches)

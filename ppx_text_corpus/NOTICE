@@ -1,11 +1,11 @@
 # Text corpus for PersonaPlex student text-only distillation
 
-Built by `tools/build_text_corpus.py` on 2026-10-04T10:40:07.
+Built by `tools/build_text_corpus.py` on 2026-10-04T10:41:58.
 Format: JSONL, one document per line with a `"text"` key -- exactly what
 `distill/data/text_dataset.py` reads. Extra keys (`title`, `topic`, `source`, `license`) are
 provenance only and are ignored by the loader.
 
-Totals: 5,325 documents, 8,721,149 characters.
+Totals: 9,459 documents, 13,605,730 characters.
 
 ## Sources and licenses
 

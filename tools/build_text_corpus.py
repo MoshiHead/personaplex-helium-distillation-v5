@@ -208,10 +208,8 @@ ETHEREUM_ORG: dict[str, list[str]] = {
 # Bitcoin Improvement Proposals (MediaWiki) and Ethereum Improvement Proposals (Markdown): the normative
 # specs behind everything the teacher explains, each written as prose with a motivation and rationale
 # section. Listed through the GitHub contents API, then pulled from raw.githubusercontent.
-BIPS_API = "https://api.github.com/repos/bitcoin/bips/contents?ref=master"
-BIPS_RAW = "https://raw.githubusercontent.com/bitcoin/bips/master/"
-EIPS_API = "https://api.github.com/repos/ethereum/EIPs/contents/EIPS?ref=master"
-EIPS_RAW = "https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/"
+BIPS_REPO = "bitcoin/bips"
+EIPS_REPO = "ethereum/EIPs"
 # Most EIPs are short stubs or withdrawn drafts; only files above these sizes carry explanatory prose.
 EIP_MIN_BYTES = 6000
 BIP_MIN_BYTES = 4000
@@ -449,26 +447,56 @@ def split_mediawiki(title: str, raw: str) -> list[tuple[str, str]]:
     return out
 
 
-def github_listing(api_url: str, suffixes: tuple[str, ...], min_bytes: int,
-                   get: tp.Optional[tp.Callable[[str, str], tp.Optional[str]]] = None) -> list[str]:
-    """File names in a GitHub directory, filtered by suffix and minimum size.
+def repo_tarball_members(cache: Path, repo: str, subdir: str, suffixes: tuple[str, ...],
+                         min_bytes: int, allow_fetch: bool) -> list[tuple[str, str]]:
+    """-> [(filename, text)] for files under `subdir` in a GitHub repo, via its source tarball.
 
-    `get` is the caller's cache-aware fetcher. It must be used: GitHub's unauthenticated API allows only
-    60 requests/hour, so an uncached listing makes the build fail with HTTP 403 on a re-run (and silently
-    produce zero documents for that source) -- which is what happened the first time this ran.
+    Deliberately NOT the contents API: unauthenticated GitHub API calls are capped at 60/hour, so listing
+    a directory and then pulling N raw files both rate-limits (HTTP 403, which silently yields zero
+    documents) and costs N+1 requests. `codeload.github.com/<repo>/tar.gz/refs/heads/<branch>` is one
+    request, is not part of the API quota, and is cached here like every other download.
     """
-    raw = get("listing_" + api_url, api_url) if get else fetch(api_url, pause=0.2)
-    if not raw:
-        return []
-    try:
-        entries = json.loads(raw)
-    except json.JSONDecodeError:
-        return []
-    if not isinstance(entries, list):
-        return []
-    return sorted(e["name"] for e in entries
-                  if e.get("type") == "file" and e["name"].endswith(suffixes)
-                  and e.get("size", 0) >= min_bytes)
+    import io
+    import tarfile
+
+    tar_path = cache / (re.sub(r"[^A-Za-z0-9._-]+", "_", repo) + ".tar.gz")
+    if not tar_path.exists():
+        if not allow_fetch:
+            return []
+        for branch in ("master", "main"):
+            url = f"https://codeload.github.com/{repo}/tar.gz/refs/heads/{branch}"
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": UA})
+                with urllib.request.urlopen(req, timeout=300) as r:
+                    data = r.read()
+                tar_path.write_bytes(data)
+                print(f"    downloaded {repo}@{branch} ({len(data) / 1e6:.1f} MB)")
+                break
+            except urllib.error.HTTPError as e:
+                if e.code != 404:
+                    print(f"    HTTP {e.code} for {url}")
+            except Exception as e:                                   # noqa: BLE001
+                print(f"    {type(e).__name__} for {url}")
+        if not tar_path.exists():
+            return []
+
+    out: list[tuple[str, str]] = []
+    with tarfile.open(tar_path, "r:gz") as tf:
+        for m in tf.getmembers():
+            if not m.isfile() or m.size < min_bytes:
+                continue
+            # tarball paths are "<repo>-<branch>/<path>"; compare on the path inside the repo
+            inner = m.name.split("/", 1)[1] if "/" in m.name else m.name
+            if subdir and not inner.startswith(subdir.rstrip("/") + "/"):
+                continue
+            name = Path(inner).name
+            if not name.endswith(suffixes):
+                continue
+            fh = tf.extractfile(m)
+            if fh is None:
+                continue
+            out.append((name, fh.read().decode("utf-8", errors="replace")))
+    return sorted(out)
 
 
 MD_SECTION_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.M)
@@ -723,13 +751,10 @@ def main() -> int:
 
     if "bips" in args.sources:
         print("fetching Bitcoin Improvement Proposals ...")
-        names = github_listing(BIPS_API, (".mediawiki", ".md"), BIP_MIN_BYTES, get=cached)
-        print(f"    {len(names)} BIPs above {BIP_MIN_BYTES} bytes")
-        for fn in names:
-            body = cached("bip_" + fn, BIPS_RAW + fn)
-            if not body:
-                missing.append(f"bips:{fn}")
-                continue
+        members = repo_tarball_members(cache, BIPS_REPO, "", (".mediawiki", ".md"),
+                                       BIP_MIN_BYTES, not args.no_fetch)
+        print(f"    {len(members)} BIPs above {BIP_MIN_BYTES} bytes")
+        for fn, body in members:
             fetched["bips"] += 1
             stem = fn.rsplit(".", 1)[0]
             split = split_mediawiki if fn.endswith(".mediawiki") else split_markdown
@@ -738,13 +763,10 @@ def main() -> int:
 
     if "eips" in args.sources:
         print("fetching Ethereum Improvement Proposals ...")
-        names = github_listing(EIPS_API, (".md",), EIP_MIN_BYTES, get=cached)
-        print(f"    {len(names)} EIPs above {EIP_MIN_BYTES} bytes")
-        for fn in names:
-            body = cached("eip_" + fn, EIPS_RAW + fn)
-            if not body:
-                missing.append(f"eips:{fn}")
-                continue
+        members = repo_tarball_members(cache, EIPS_REPO, "EIPS", (".md",),
+                                       EIP_MIN_BYTES, not args.no_fetch)
+        print(f"    {len(members)} EIPs above {EIP_MIN_BYTES} bytes")
+        for fn, body in members:
             fetched["eips"] += 1
             stem = fn.rsplit(".", 1)[0]
             for name, sec in split_markdown(f"EIP: {stem}", body):

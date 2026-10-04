@@ -1,11 +1,19 @@
 {
- "built": "2026-10-04T10:40:07",
+ "built": "2026-10-04T10:41:58",
  "builder": "tools/build_text_corpus.py",
  "format": "JSONL, one document per line, 'text' key -- read by distill/data/text_dataset.py",
  "sources": {
   "wikipedia": {
    "files_or_articles": 257,
    "license": "CC BY-SA 4.0"
+  },
+  "bips": {
+   "files_or_articles": 192,
+   "license": "public domain / CC0, per each proposal's Licence header (BIP-2)"
+  },
+  "eips": {
+   "files_or_articles": 347,
+   "license": "CC0 1.0"
   },
   "mastering_bitcoin": {
    "files_or_articles": 15,
@@ -17,9 +25,9 @@
   }
  },
  "totals": {
-  "documents": 5325,
-  "characters": 8721149,
-  "words": 1361257
+  "documents": 9459,
+  "characters": 13605730,
+  "words": 2123246
  },
  "files": {
   "01_wikipedia.jsonl": {
@@ -39,12 +47,24 @@
    "characters": 394045,
    "bytes": 454477,
    "license": "CC BY 4.0"
+  },
+  "04_bitcoin_bips.jsonl": {
+   "documents": 1380,
+   "characters": 1785275,
+   "bytes": 2049877,
+   "license": "public domain / CC0, per each proposal's Licence header (BIP-2)"
+  },
+  "05_ethereum_eips.jsonl": {
+   "documents": 2754,
+   "characters": 3099306,
+   "bytes": 3463264,
+   "license": "CC0 1.0"
   }
  },
  "by_topic": {
   "bitcoin": {
-   "documents": 89,
-   "characters": 144068
+   "documents": 1469,
+   "characters": 1929343
   },
   "bitcoin_history": {
    "documents": 123,
@@ -71,8 +91,8 @@
    "characters": 255758
   },
   "ethereum": {
-   "documents": 265,
-   "characters": 332820
+   "documents": 3019,
+   "characters": 3432126
   },
   "finance_economics": {
    "documents": 830,
@@ -96,13 +116,14 @@
   }
  },
  "rejected": {
-  "too_short": 1166,
-  "too_few_sentences": 113,
-  "exact_duplicate": 61,
-  "line_fragments": 53,
-  "too_few_words": 52,
-  "digit_heavy": 19,
-  "low_letter_ratio": 8
+  "too_short": 5447,
+  "too_few_sentences": 364,
+  "too_few_words": 194,
+  "digit_heavy": 88,
+  "line_fragments": 85,
+  "exact_duplicate": 72,
+  "low_letter_ratio": 17,
+  "near_duplicate": 1
  },
  "missing_sources": [],
  "filters": {

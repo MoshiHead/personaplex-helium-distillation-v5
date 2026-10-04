@@ -32,6 +32,12 @@ PATHS = [
     # these two lines `STUDENT_CONFIG = "student_ppx_m"` dies in load_student_config with FileNotFoundError.
     "distill/configs/student_ppx_s.yaml",
     "distill/configs/student_ppx_m.yaml",
+    # tools/ is not in the GitHub clone either, and both of these are needed ON the pod:
+    # build_text_corpus.py rebuilds /workspace/ppx_text_corpus, and export_checkpoint.py is the only way
+    # to listen to a mid-run checkpoint (the trainer exports only when it reaches --total-steps).
+    "tools/build_text_corpus.py",
+    "tools/verify_text_corpus.py",
+    "tools/export_checkpoint.py",
 ]
 
 
@@ -39,20 +45,23 @@ def magic_for(path: str) -> str:
     return "%%writefile {REPO_DIR}/" + path
 
 
+MKDIR_CELL = [
+    "import os\n",
+    "# %%writefile does not create folders, so every directory the cells below write into must exist first.\n",
+    'for _d in ("distill/data", "distill/configs", "tools"):\n',
+    "    os.makedirs(os.path.join(REPO_DIR, _d), exist_ok=True)\n",
+    'print("writing updated training code into", REPO_DIR)\n',
+]
+
+
 def ensure_dirs_cell(nb) -> bool:
-    """The notebook's `os.makedirs(... "distill", "data")` cell must also create distill/configs, because
-    %%writefile does not create folders."""
+    """Make the notebook's mkdir cell create every directory the %%writefile cells target."""
     for c in nb["cells"]:
         if c["cell_type"] != "code":
             continue
         src = "".join(c["source"])
-        if 'os.makedirs(os.path.join(REPO_DIR, "distill", "data")' in src and '"configs"' not in src:
-            c["source"] = [
-                "import os\n",
-                'for _d in ("data", "configs"):      # %%writefile does not create folders\n',
-                '    os.makedirs(os.path.join(REPO_DIR, "distill", _d), exist_ok=True)\n',
-                'print("writing updated training code into", os.path.join(REPO_DIR, "distill"))\n',
-            ]
+        if "os.makedirs(os.path.join(REPO_DIR" in src and '"tools"' not in src:
+            c["source"] = MKDIR_CELL
             return True
     return False
 
