@@ -1,0 +1,34 @@
+# Text corpus for PersonaPlex student text-only distillation
+
+Built by `tools/build_text_corpus.py` on 2026-10-04T10:40:07.
+Format: JSONL, one document per line with a `"text"` key -- exactly what
+`distill/data/text_dataset.py` reads. Extra keys (`title`, `topic`, `source`, `license`) are
+provenance only and are ignored by the loader.
+
+Totals: 5,325 documents, 8,721,149 characters.
+
+## Sources and licenses
+
+1. **English Wikipedia** -- Creative Commons Attribution-ShareAlike 4.0 (CC BY-SA 4.0).
+   Retrieved via the MediaWiki `extracts` API. Articles are listed in `corpus_manifest.json`
+   and in each document's `title` field. https://en.wikipedia.org
+2. **Mastering Bitcoin, 3rd edition** -- Andreas M. Antonopoulos and David A. Harding,
+   Creative Commons Attribution-ShareAlike 4.0 (CC BY-SA 4.0).
+   https://github.com/bitcoinbook/bitcoinbook  (Appendix A is the Bitcoin whitepaper.)
+3. **ethereum.org developer documentation** -- Creative Commons Attribution 4.0 (CC BY 4.0).
+   https://github.com/ethereum/ethereum-org-website
+
+All three are used unmodified in substance; the builder strips markup, code listings, tables and
+citation sections, and splits articles into section-sized documents. CC BY-SA requires that
+derivative distributions carry the same license and attribution -- keep this file alongside the
+corpus, and note that a model trained on it is generally not considered a derivative work of the
+text, but redistributing the corpus itself is.
+
+This file is named `NOTICE` with no extension on purpose: `distill/data/text_dataset.py` treats
+`.md` and `.txt` files as training documents, so a `NOTICE.md` here would be trained on.
+
+## Deliberately excluded
+
+Price and market data, OHLC series, charts, social-media posts, forum scrapes, SEO/affiliate
+content and noisy scraped crypto datasets. The quality filter in the builder rejects digit-heavy
+text, line fragments, listicles and citation residue; see `corpus_manifest.json -> rejected`.

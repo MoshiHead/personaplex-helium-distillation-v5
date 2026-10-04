@@ -1,0 +1,118 @@
+{
+ "built": "2026-10-04T10:40:07",
+ "builder": "tools/build_text_corpus.py",
+ "format": "JSONL, one document per line, 'text' key -- read by distill/data/text_dataset.py",
+ "sources": {
+  "wikipedia": {
+   "files_or_articles": 257,
+   "license": "CC BY-SA 4.0"
+  },
+  "mastering_bitcoin": {
+   "files_or_articles": 15,
+   "license": "CC BY-SA 4.0"
+  },
+  "ethereum_org": {
+   "files_or_articles": 43,
+   "license": "CC BY 4.0"
+  }
+ },
+ "totals": {
+  "documents": 5325,
+  "characters": 8721149,
+  "words": 1361257
+ },
+ "files": {
+  "01_wikipedia.jsonl": {
+   "documents": 4697,
+   "characters": 7720422,
+   "bytes": 8391928,
+   "license": "CC BY-SA 4.0"
+  },
+  "02_mastering_bitcoin.jsonl": {
+   "documents": 290,
+   "characters": 606682,
+   "bytes": 668985,
+   "license": "CC BY-SA 4.0"
+  },
+  "03_ethereum_org_docs.jsonl": {
+   "documents": 338,
+   "characters": 394045,
+   "bytes": 454477,
+   "license": "CC BY 4.0"
+  }
+ },
+ "by_topic": {
+  "bitcoin": {
+   "documents": 89,
+   "characters": 144068
+  },
+  "bitcoin_history": {
+   "documents": 123,
+   "characters": 180914
+  },
+  "bitcoin_transactions": {
+   "documents": 94,
+   "characters": 159319
+  },
+  "blockchain": {
+   "documents": 104,
+   "characters": 158302
+  },
+  "computing": {
+   "documents": 722,
+   "characters": 1097676
+  },
+  "crypto_fundamentals": {
+   "documents": 243,
+   "characters": 354475
+  },
+  "crypto_security": {
+   "documents": 195,
+   "characters": 255758
+  },
+  "ethereum": {
+   "documents": 265,
+   "characters": 332820
+  },
+  "finance_economics": {
+   "documents": 830,
+   "characters": 1269060
+  },
+  "general_knowledge": {
+   "documents": 2251,
+   "characters": 4099174
+  },
+  "mining_and_pow": {
+   "documents": 159,
+   "characters": 258439
+  },
+  "stablecoins": {
+   "documents": 57,
+   "characters": 73157
+  },
+  "wallets_and_keys": {
+   "documents": 193,
+   "characters": 337987
+  }
+ },
+ "rejected": {
+  "too_short": 1166,
+  "too_few_sentences": 113,
+  "exact_duplicate": 61,
+  "line_fragments": 53,
+  "too_few_words": 52,
+  "digit_heavy": 19,
+  "low_letter_ratio": 8
+ },
+ "missing_sources": [],
+ "filters": {
+  "min_chars": 400,
+  "max_chars": 6000,
+  "min_words": 60,
+  "max_digit_ratio": 0.12,
+  "min_letter_ratio": 0.6,
+  "min_avg_line_chars": 40,
+  "near_dup_shingle": 8,
+  "near_dup_threshold": 0.5
+ }
+}

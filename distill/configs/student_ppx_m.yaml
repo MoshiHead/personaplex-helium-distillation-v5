@@ -1,0 +1,76 @@
+# Student temporal transformer ("M" size): the SAME ~1B class as student_ppx_s, with the parameters
+# reallocated from depth to FFN width -- because the FFN is where a transformer stores facts.
+#
+# Why this config exists
+# ----------------------
+# `student_ppx_s` reduces the teacher's temporal transformer on five axes at once. Measured against the real
+# teacher (dim 4096, 32 layers, hidden_scale 4.125 -> SwiGLU hidden 11264):
+#
+#                     teacher        ppx_s          ppx_m (this file)
+#   layers            32             20   (62%)    16   (50%)
+#   residual          4096           2048 (50%)    2048 (50%)
+#   query heads       32             16   (50%)    16   (50%)
+#   KV heads          32             4  (mean of   8  (mean of 4
+#                                        8 heads)      heads -- half the pooling damage)
+#   FFN hidden        11264          3754 (33.3%)  8192 (72.7%)
+#   FFN memory slots  360,448        75,080        131,072
+#                                    (20.8%)       (36.4%)
+#   transformer       6.577 B        0.671 B       1.007 B
+#   trainable total   --             0.81 B        1.15 B
+#
+# `init_from_teacher.select_ffn_channels` keeps FFN hidden channels by activation RMS, which preferentially
+# keeps dense always-on channels and drops the sparse high-specificity ones -- exactly where individual facts
+# live. Keeping 20.8% of those slots is the single largest knowledge loss in the init, and no amount of
+# retraining on a ~0.5M-token audio corpus puts them back. 36.4% is a much better starting point for the same
+# parameter class.
+#
+# Cost: ~1.5x the temporal-transformer FLOPs of student_ppx_s. On the GPU that measured
+# `temporal.mean_ms = 17.1`, `bridge_depth.mean_ms = 28.3` (frozen, unchanged) and `rtf 0.786`, expect
+# temporal ~25 ms and rtf ~0.85-0.90 -- still real-time, but with less headroom. MEASURE IT with the streaming
+# notebook's benchmark cell before committing to a long run; if rtf >= 1.0 on your GPU, drop
+# num_hidden_layers to 14 (rtf ~0.82, trainable ~1.02 B) rather than shrinking intermediate_size.
+#
+# Everything else is deliberately identical to student_ppx_s, so this stays a drop-in: hidden_size 2048 keeps
+# `bridge.in_dim == hidden_size`, head_dim stays 128 for the teacher's RoPE geometry, and the frozen
+# out_norm / text_linear / depformer_in / depformer / linears chain is reused byte-for-byte. The export format
+# and `moshi.server` / `moshi.offline --model student` paths are unchanged -- only `--student-config` differs.
+name: student_ppx_m
+
+num_hidden_layers: 16        # 20 -> 16: pays for the wider FFN below
+hidden_size: 2048            # unchanged (bridge.in_dim must equal this; head_dim = 2048/16 = 128)
+intermediate_size: 12288     # 5632 -> 12288 => SwiGLU hidden (2 * 12288) // 3 = 8192 (was 3754)
+num_attention_heads: 16      # query heads; head_dim = 128, as the teacher's RoPE requires
+num_key_value_heads: 8       # 4 -> 8: GQA 2:1. Each student KV head is the mean of 4 teacher heads instead
+                             # of 8, halving the damage `kv_head_bands` does to the attention geometry.
+rope_theta: 10000            # copied verbatim from the teacher's max_period
+max_frames: 1500             # student attention context cap (half the teacher's real 3000)
+norm: rms_norm_f32
+gating: silu
+layer_scale: null
+causal: true
+
+init:
+  num_calibration_batches: 64   # see distill/train.py --calib-batches: 16 was thin for a 4096x4096 covariance
+  keep_first: 3
+  keep_last: 3
+
+# Reference dimensions of the FROZEN components reused as-is from the teacher checkpoint. Documentation only --
+# loaders.py reads the real shapes off the teacher state dict.
+teacher_reference:
+  dim: 4096
+  num_heads: 32
+  num_layers: 32
+  context: 3000
+  n_q: 16
+  dep_q: 16
+  card: 2048
+  text_card: 32000
+  depformer_dim: 1024
+  depformer_num_heads: 16
+  depformer_num_layers: 6
+  depformer_dim_feedforward: 4224
+  max_period: 10000
+
+bridge:
+  in_dim: 2048
+  out_dim: 4096
